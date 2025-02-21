@@ -1,8 +1,11 @@
+import 'dart:convert';
+import 'package:flutter/foundation.dart'; // ใช้สำหรับ kIsWeb
 import 'package:flutter/material.dart';
 import 'package:flutter_login/flutter_login.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'home_page.dart';
+import 'services/api_service.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -17,10 +20,7 @@ class _LoginPageState extends State<LoginPage> {
 
   Duration get loginTime => const Duration(milliseconds: 2000);
 
-  static const users = {
-    'test@gmail.com': '123456',
-    'name@rmutp.ac.th': '1150',
-  };
+  get users => null;
 
   @override
   void initState() {
@@ -28,24 +28,31 @@ class _LoginPageState extends State<LoginPage> {
     checkBiometricAuth();
   }
 
-  // ตรวจสอบและทำ Biometric Authentication
   Future<void> checkBiometricAuth() async {
-    try {
-      final String? savedEmail = await _storage.read(key: 'email');
-      final String? savedPassword = await _storage.read(key: 'password');
+    if (kIsWeb) {
+      // ถ้ารันบนเว็บ ไม่รองรับ Biometric
+      debugPrint('Biometric authentication is not supported on the web.');
+      return;
+    }
 
-      if (savedEmail != null && savedPassword != null) {
+    try {
+      // ตรวจสอบข้อมูลที่บันทึกไว้
+      final String? savedId = await _storage.read(key: 'saved_id');
+      final String? savedPassword = await _storage.read(key: 'password');
+      final String? savedUserData = await _storage.read(key: 'user_data');
+
+      // ถ้ามีข้อมูลครบ
+      if (savedId != null && savedPassword != null && savedUserData != null) {
         // ตรวจสอบว่าอุปกรณ์รองรับ biometric หรือไม่
-        final bool canAuthenticateWithBiometrics =
-            await _localAuth.canCheckBiometrics;
-        final bool canAuthenticate = canAuthenticateWithBiometrics ||
+        final bool canAuthenticate = await _localAuth.canCheckBiometrics ||
             await _localAuth.isDeviceSupported();
 
         if (canAuthenticate) {
-          // ตรวจสอบประเภทของ biometric ที่มี
-          List<BiometricType> availableBiometrics =
+          // ตรวจสอบประเภท biometric ที่มี
+          final List<BiometricType> availableBiometrics =
               await _localAuth.getAvailableBiometrics();
 
+          // กำหนดข้อความตามประเภท biometric
           String authMessage = 'กรุณายืนยันตัวตนด้วย ';
           if (availableBiometrics.contains(BiometricType.face)) {
             authMessage += 'Face Unlock';
@@ -55,6 +62,7 @@ class _LoginPageState extends State<LoginPage> {
             authMessage += 'Biometric';
           }
 
+          // แสดง biometric dialog
           final bool didAuthenticate = await _localAuth.authenticate(
             localizedReason: authMessage,
             options: const AuthenticationOptions(
@@ -63,12 +71,36 @@ class _LoginPageState extends State<LoginPage> {
             ),
           );
 
-          if (didAuthenticate) {
-            if (users.containsKey(savedEmail) &&
-                users[savedEmail] == savedPassword) {
-              if (mounted) {
+          // ถ้า authenticate สำเร็จ
+          if (didAuthenticate && mounted) {
+            try {
+              // ล็อกอินด้วยข้อมูลที่บันทึกไว้
+              final response = await ApiService.login(savedId, savedPassword);
+
+              if (response['status'] == 'success') {
+                // อัพเดทข้อมูลผู้ใช้ใหม่
+                await _storage.write(
+                    key: 'user_id', value: response['user_id'].toString());
+                await _storage.write(
+                    key: 'user_data',
+                    value: json.encode(response['user_data']));
+
+                // นำไปยังหน้าหลัก
                 Navigator.of(context).pushReplacement(
-                  MaterialPageRoute(builder: (context) => const HomePage()),
+                  MaterialPageRoute(builder: (context) => HomePage()),
+                );
+              } else {
+                // ถ้าล็อกอินไม่สำเร็จ ลบข้อมูลที่บันทึกไว้
+                await _storage.delete(key: 'saved_id');
+                await _storage.delete(key: 'password');
+                await _storage.delete(key: 'user_data');
+              }
+            } catch (e) {
+              debugPrint('Auto-login failed: $e');
+              // แสดง error message ถ้าต้องการ
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('เกิดข้อผิดพลาด: $e')),
                 );
               }
             }
@@ -77,33 +109,34 @@ class _LoginPageState extends State<LoginPage> {
       }
     } catch (e) {
       debugPrint('Error during biometric auth: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('เกิดข้อผิดพลาดในการยืนยันตัวตน: $e')),
+        );
+      }
     }
   }
 
   Future<String?> _authUser(LoginData data) async {
-    debugPrint('Name: ${data.name}, Password: ${data.password}');
-    return Future.delayed(loginTime).then((_) async {
-      if (!users.containsKey(data.name)) {
-        return 'User not exists';
-      }
-      if (users[data.name] != data.password) {
-        return 'Password does not match';
-      }
+    try {
+      final response = await ApiService.login(data.name, data.password);
 
-      // ตรวจสอบว่าอุปกรณ์รองรับ biometric หรือไม่
-      final bool canAuthenticate = await _localAuth.canCheckBiometrics ||
-          await _localAuth.isDeviceSupported();
+      if (response['status'] == 'success') {
+        // เก็บข้อมูลผู้ใช้
+        await _storage.write(
+            key: 'user_id', value: data.name); // เก็บ ID ที่ใช้ login
+        await _storage.write(
+            key: 'user_data', value: json.encode(response['user_data']));
 
-      if (canAuthenticate && mounted) {
-        // ถามผู้ใช้ว่าต้องการใช้ biometric ไหม
-        bool? shouldSetupBiometric = await showDialog<bool>(
-          context: context,
-          builder: (BuildContext context) {
-            return AlertDialog(
+        if (!kIsWeb && await _localAuth.canCheckBiometrics) {
+          // ตรวจสอบว่าไม่ใช่เว็บ และรองรับ Biometric
+          bool? shouldSetupBiometric = await showDialog<bool>(
+            context: context,
+            builder: (context) => AlertDialog(
               title: const Text('ตั้งค่าการยืนยันตัวตน'),
               content: const Text(
                   'คุณต้องการใช้ Face Unlock หรือลายนิ้วมือสำหรับการเข้าสู่ระบบครั้งต่อไปหรือไม่?'),
-              actions: <Widget>[
+              actions: [
                 TextButton(
                   child: const Text('ไม่ใช้'),
                   onPressed: () => Navigator.of(context).pop(false),
@@ -113,18 +146,21 @@ class _LoginPageState extends State<LoginPage> {
                   onPressed: () => Navigator.of(context).pop(true),
                 ),
               ],
-            );
-          },
-        );
+            ),
+          );
 
-        if (shouldSetupBiometric == true) {
-          await _storage.write(key: 'email', value: data.name);
-          await _storage.write(key: 'password', value: data.password);
+          if (shouldSetupBiometric == true) {
+            await _storage.write(key: 'saved_id', value: data.name);
+            await _storage.write(key: 'password', value: data.password);
+          }
         }
+        return null;
+      } else {
+        return response['message'];
       }
-
-      return null;
-    });
+    } catch (e) {
+      return e.toString();
+    }
   }
 
   Future<String?> _signupUser(SignupData data) {
@@ -145,7 +181,7 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   Future<void> clearLoginData() async {
-    await _storage.delete(key: 'email');
+    await _storage.delete(key: 'user_id');
     await _storage.delete(key: 'password');
   }
 
@@ -156,13 +192,21 @@ class _LoginPageState extends State<LoginPage> {
         title: 'Library Assistant',
         logo: const AssetImage('lib/images/RMUTP.png'),
         onLogin: _authUser,
-        onSignup: _signupUser,
         onSubmitAnimationCompleted: () {
           Navigator.of(context).pushReplacement(MaterialPageRoute(
-            builder: (context) => const HomePage(),
+            builder: (context) => HomePage(),
           ));
         },
         onRecoverPassword: _recoverPassword,
+        hideForgotPasswordButton: true,
+        messages: LoginMessages(
+          userHint: 'อีเมลนักศึกษา/บุคลากร',
+          passwordHint: 'รหัสผ่าน',
+          confirmPasswordHint: 'ยืนยันรหัสผ่าน',
+          loginButton: 'เข้าสู่ระบบ',
+          goBackButton: 'ย้อนกลับ',
+          confirmPasswordError: 'รหัสผ่านไม่ตรงกัน!',
+        ),
       ),
     );
   }
