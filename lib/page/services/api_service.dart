@@ -2,12 +2,24 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 class ApiService {
-  static const String baseUrl = 'http://26.100.59.12:8000';
+  static String _baseUrl = 'http://26.100.59.12:8000';
+  static const String _port = '8000';
+
+  // เพิ่มฟังก์ชันสำหรับดึงที่อยู่เซิร์ฟเวอร์ปัจจุบัน
+  static String getServerAddress() {
+    // ตัดส่วน http:// และ port ออก เหลือแค่ IP address
+    return _baseUrl.replaceAll('http://', '').replaceAll(':$_port', '');
+  }
+
+  // เพิ่มฟังก์ชันสำหรับตั้งค่าที่อยู่เซิร์ฟเวอร์ใหม่
+  static void setServerAddress(String newAddress) {
+    _baseUrl = 'http://$newAddress:$_port';
+  }
 
   static Future<Map<String, dynamic>> login(String id, String password) async {
     try {
       final response = await http.post(
-        Uri.parse('$baseUrl/login'),
+        Uri.parse('$_baseUrl/login'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
           'username': id,

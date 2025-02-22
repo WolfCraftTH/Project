@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:barcode_widget/barcode_widget.dart';
 import 'package:google_nav_bar/google_nav_bar.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -78,7 +79,7 @@ class _BookPageState extends State<BookPage> {
     }
 
     setState(() {
-      _barcodeData = '$_password${_bookNameController.text}';
+      _barcodeData = '$_password' + 'book' + _bookNameController.text;
       _showBarcode = true;
     });
   }
@@ -124,8 +125,12 @@ class _BookPageState extends State<BookPage> {
                           const SizedBox(height: 16),
                           TextField(
                             controller: _bookNameController,
+                            keyboardType: TextInputType.number,
+                            inputFormatters: [
+                              FilteringTextInputFormatter.digitsOnly,
+                            ],
                             decoration: InputDecoration(
-                              hintText: 'รหัสหนังสือ',
+                              hintText: 'รหัสหนังสือ (ตัวเลขเท่านั้น)',
                               border: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(8),
                               ),

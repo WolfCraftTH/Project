@@ -1,5 +1,5 @@
 import 'dart:convert';
-import 'package:flutter/foundation.dart'; // ใช้สำหรับ kIsWeb
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_login/flutter_login.dart';
 import 'package:local_auth/local_auth.dart';
@@ -17,9 +17,7 @@ class LoginPage extends StatefulWidget {
 class _LoginPageState extends State<LoginPage> {
   final LocalAuthentication _localAuth = LocalAuthentication();
   final FlutterSecureStorage _storage = FlutterSecureStorage();
-
   Duration get loginTime => const Duration(milliseconds: 2000);
-
   get users => null;
 
   @override
@@ -74,7 +72,6 @@ class _LoginPageState extends State<LoginPage> {
                 await _storage.write(
                     key: 'user_data',
                     value: json.encode(response['user_data']));
-                // เพิ่มการบันทึก password
                 await _storage.write(key: 'password', value: savedPassword);
 
                 Navigator.of(context).pushReplacement(
@@ -106,16 +103,73 @@ class _LoginPageState extends State<LoginPage> {
     }
   }
 
+  void _showServerSettings() {
+    final TextEditingController controller = TextEditingController(
+      text: ApiService.getServerAddress(),
+    );
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('ตั้งค่าที่อยู่เซิร์ฟเวอร์'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: controller,
+              decoration: const InputDecoration(
+                labelText: 'ที่อยู่เซิร์ฟเวอร์',
+                hintText: 'เช่น 26.100.59.12',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'หมายเหตุ: port จะถูกตั้งค่าเป็น 8000 โดยอัตโนมัติ',
+              style: TextStyle(
+                fontSize: 12,
+                color: Colors.grey,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            child: const Text('ยกเลิก'),
+            onPressed: () => Navigator.of(context).pop(),
+          ),
+          TextButton(
+            child: const Text(
+              'บันทึก',
+              style: TextStyle(color: Colors.green),
+            ),
+            onPressed: () {
+              if (controller.text.isNotEmpty) {
+                ApiService.setServerAddress(controller.text);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('บันทึกการตั้งค่าเรียบร้อย'),
+                    backgroundColor: Colors.green,
+                  ),
+                );
+              }
+              Navigator.of(context).pop();
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<String?> _authUser(LoginData data) async {
     try {
       final response = await ApiService.login(data.name, data.password);
 
       if (response['status'] == 'success') {
-        // บันทึกข้อมูลผู้ใช้
         await _storage.write(key: 'user_id', value: data.name);
         await _storage.write(
             key: 'user_data', value: json.encode(response['user_data']));
-        // บันทึก password สำหรับใช้แสดง barcode
         await _storage.write(key: 'password', value: data.password);
 
         if (!kIsWeb && await _localAuth.canCheckBiometrics) {
@@ -179,25 +233,38 @@ class _LoginPageState extends State<LoginPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: FlutterLogin(
-        title: 'Library Assistant',
-        logo: const AssetImage('lib/images/RMUTP.png'),
-        onLogin: _authUser,
-        onSubmitAnimationCompleted: () {
-          Navigator.of(context).pushReplacement(MaterialPageRoute(
-            builder: (context) => HomePage(),
-          ));
-        },
-        onRecoverPassword: _recoverPassword,
-        hideForgotPasswordButton: true,
-        messages: LoginMessages(
-          userHint: 'อีเมลนักศึกษา/บุคลากร',
-          passwordHint: 'รหัสผ่าน',
-          confirmPasswordHint: 'ยืนยันรหัสผ่าน',
-          loginButton: 'เข้าสู่ระบบ',
-          goBackButton: 'ย้อนกลับ',
-          confirmPasswordError: 'รหัสผ่านไม่ตรงกัน!',
-        ),
+      body: Stack(
+        children: [
+          FlutterLogin(
+            title: 'Library Assistant',
+            logo: const AssetImage('lib/images/RMUTP.png'),
+            onLogin: _authUser,
+            onSubmitAnimationCompleted: () {
+              Navigator.of(context).pushReplacement(MaterialPageRoute(
+                builder: (context) => HomePage(),
+              ));
+            },
+            onRecoverPassword: _recoverPassword,
+            hideForgotPasswordButton: true,
+            messages: LoginMessages(
+              userHint: 'อีเมลนักศึกษา/บุคลากร',
+              passwordHint: 'รหัสผ่าน',
+              confirmPasswordHint: 'ยืนยันรหัสผ่าน',
+              loginButton: 'เข้าสู่ระบบ',
+              goBackButton: 'ย้อนกลับ',
+              confirmPasswordError: 'รหัสผ่านไม่ตรงกัน!',
+            ),
+          ),
+          Positioned(
+            top: 16,
+            right: 16,
+            child: IconButton(
+              icon: const Icon(Icons.settings),
+              onPressed: _showServerSettings,
+              color: Colors.grey[700],
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -80,7 +80,6 @@ class _AIChatPageState extends State<AIChatPage>
   Future<void> _initializeChat() async {
     if (_userId == null) return;
 
-    // ลองโหลดข้อความจาก Global State ก่อน
     final cachedMessages = chatState.getMessages(_userId!);
     if (cachedMessages.isNotEmpty) {
       setState(() {
@@ -90,7 +89,6 @@ class _AIChatPageState extends State<AIChatPage>
       return;
     }
 
-    // ถ้าไม่มีใน Global State ให้โหลดจาก SharedPreferences
     try {
       prefs = await SharedPreferences.getInstance();
       await _loadMessages();
@@ -154,6 +152,43 @@ class _AIChatPageState extends State<AIChatPage>
     }
   }
 
+  Future<void> clearChatHistory() async {
+    if (_userId == null) {
+      _showError('กรุณาเข้าสู่ระบบก่อนใช้งาน');
+      return;
+    }
+
+    try {
+      final uri = Uri.parse('${widget.apiUrl}/clear');
+      final response = await http.post(
+        uri,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'user_id': _userId,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        setState(() {
+          messages.clear();
+        });
+        await prefs.remove('chat_history_$_userId');
+        chatState.clearMessages(_userId!);
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('ล้างประวัติการสนทนาเรียบร้อย'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      } else {
+        _showError('เกิดข้อผิดพลาดในการล้างประวัติการสนทนา');
+      }
+    } catch (e) {
+      _showError('เกิดข้อผิดพลาด: $e');
+    }
+  }
+
   Future<void> getAIResponse(String message) async {
     if (_userId == null) {
       _showError('กรุณาเข้าสู่ระบบก่อนใช้งาน');
@@ -167,6 +202,18 @@ class _AIChatPageState extends State<AIChatPage>
         _isLoading = true;
       });
 
+      // สร้างข้อความ "กำลังประมวลผล..."
+      final processingMessage = ChatMessage(
+        text: '⚡ กำลังประมวลผล...',
+        user: ai,
+        createdAt: DateTime.now(),
+        medias: [], // จำเป็นต้องกำหนดเพื่อป้องกันข้อผิดพลาด
+      );
+
+      setState(() {
+        messages.insert(0, processingMessage);
+      });
+
       final request = http.Request('POST', uri);
       request.headers['Content-Type'] = 'application/json';
       request.body = jsonEncode({
@@ -177,16 +224,6 @@ class _AIChatPageState extends State<AIChatPage>
       final streamedResponse = await request.send();
 
       if (streamedResponse.statusCode == 200) {
-        final aiMessage = ChatMessage(
-          text: '',
-          user: ai,
-          createdAt: DateTime.now(),
-        );
-
-        setState(() {
-          messages.insert(0, aiMessage);
-        });
-
         String fullResponse = '';
         await for (var chunk
             in streamedResponse.stream.transform(utf8.decoder)) {
@@ -199,7 +236,8 @@ class _AIChatPageState extends State<AIChatPage>
               messages[0] = ChatMessage(
                 text: fullResponse,
                 user: ai,
-                createdAt: aiMessage.createdAt,
+                createdAt: processingMessage.createdAt,
+                medias: [],
               );
             });
           } catch (e) {
@@ -210,9 +248,15 @@ class _AIChatPageState extends State<AIChatPage>
       } else {
         _showError(
             'เกิดข้อผิดพลาดในการเชื่อมต่อ: ${streamedResponse.statusCode}');
+        setState(() {
+          messages.removeAt(0);
+        });
       }
     } catch (e) {
       _showError('เกิดข้อผิดพลาด: $e');
+      setState(() {
+        messages.removeAt(0);
+      });
     } finally {
       setState(() {
         _isLoading = false;
@@ -247,6 +291,35 @@ class _AIChatPageState extends State<AIChatPage>
     );
   }
 
+  void _showClearHistoryDialog() {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('ยืนยันการล้างประวัติ'),
+          content:
+              const Text('คุณต้องการล้างประวัติการสนทนาทั้งหมดใช่หรือไม่?'),
+          actions: [
+            TextButton(
+              child: const Text('ยกเลิก'),
+              onPressed: () => Navigator.of(context).pop(),
+            ),
+            TextButton(
+              child: const Text(
+                'ยืนยัน',
+                style: TextStyle(color: Colors.red),
+              ),
+              onPressed: () {
+                Navigator.of(context).pop();
+                clearChatHistory();
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     super.build(context);
@@ -266,6 +339,15 @@ class _AIChatPageState extends State<AIChatPage>
           style: TextStyle(color: Colors.white),
         ),
         backgroundColor: const Color.fromARGB(255, 103, 80, 164),
+        actions: [
+          IconButton(
+            icon: const Icon(
+              Icons.delete_outline,
+              color: Colors.white,
+            ),
+            onPressed: _showClearHistoryDialog,
+          ),
+        ],
       ),
       body: Column(
         children: [
