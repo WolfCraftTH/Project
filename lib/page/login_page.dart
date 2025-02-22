@@ -30,29 +30,23 @@ class _LoginPageState extends State<LoginPage> {
 
   Future<void> checkBiometricAuth() async {
     if (kIsWeb) {
-      // ถ้ารันบนเว็บ ไม่รองรับ Biometric
       debugPrint('Biometric authentication is not supported on the web.');
       return;
     }
 
     try {
-      // ตรวจสอบข้อมูลที่บันทึกไว้
       final String? savedId = await _storage.read(key: 'saved_id');
       final String? savedPassword = await _storage.read(key: 'password');
       final String? savedUserData = await _storage.read(key: 'user_data');
 
-      // ถ้ามีข้อมูลครบ
       if (savedId != null && savedPassword != null && savedUserData != null) {
-        // ตรวจสอบว่าอุปกรณ์รองรับ biometric หรือไม่
         final bool canAuthenticate = await _localAuth.canCheckBiometrics ||
             await _localAuth.isDeviceSupported();
 
         if (canAuthenticate) {
-          // ตรวจสอบประเภท biometric ที่มี
           final List<BiometricType> availableBiometrics =
               await _localAuth.getAvailableBiometrics();
 
-          // กำหนดข้อความตามประเภท biometric
           String authMessage = 'กรุณายืนยันตัวตนด้วย ';
           if (availableBiometrics.contains(BiometricType.face)) {
             authMessage += 'Face Unlock';
@@ -62,7 +56,6 @@ class _LoginPageState extends State<LoginPage> {
             authMessage += 'Biometric';
           }
 
-          // แสดง biometric dialog
           final bool didAuthenticate = await _localAuth.authenticate(
             localizedReason: authMessage,
             options: const AuthenticationOptions(
@@ -71,33 +64,29 @@ class _LoginPageState extends State<LoginPage> {
             ),
           );
 
-          // ถ้า authenticate สำเร็จ
           if (didAuthenticate && mounted) {
             try {
-              // ล็อกอินด้วยข้อมูลที่บันทึกไว้
               final response = await ApiService.login(savedId, savedPassword);
 
               if (response['status'] == 'success') {
-                // อัพเดทข้อมูลผู้ใช้ใหม่
                 await _storage.write(
                     key: 'user_id', value: response['user_id'].toString());
                 await _storage.write(
                     key: 'user_data',
                     value: json.encode(response['user_data']));
+                // เพิ่มการบันทึก password
+                await _storage.write(key: 'password', value: savedPassword);
 
-                // นำไปยังหน้าหลัก
                 Navigator.of(context).pushReplacement(
                   MaterialPageRoute(builder: (context) => HomePage()),
                 );
               } else {
-                // ถ้าล็อกอินไม่สำเร็จ ลบข้อมูลที่บันทึกไว้
                 await _storage.delete(key: 'saved_id');
                 await _storage.delete(key: 'password');
                 await _storage.delete(key: 'user_data');
               }
             } catch (e) {
               debugPrint('Auto-login failed: $e');
-              // แสดง error message ถ้าต้องการ
               if (mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(content: Text('เกิดข้อผิดพลาด: $e')),
@@ -122,14 +111,14 @@ class _LoginPageState extends State<LoginPage> {
       final response = await ApiService.login(data.name, data.password);
 
       if (response['status'] == 'success') {
-        // เก็บข้อมูลผู้ใช้
-        await _storage.write(
-            key: 'user_id', value: data.name); // เก็บ ID ที่ใช้ login
+        // บันทึกข้อมูลผู้ใช้
+        await _storage.write(key: 'user_id', value: data.name);
         await _storage.write(
             key: 'user_data', value: json.encode(response['user_data']));
+        // บันทึก password สำหรับใช้แสดง barcode
+        await _storage.write(key: 'password', value: data.password);
 
         if (!kIsWeb && await _localAuth.canCheckBiometrics) {
-          // ตรวจสอบว่าไม่ใช่เว็บ และรองรับ Biometric
           bool? shouldSetupBiometric = await showDialog<bool>(
             context: context,
             builder: (context) => AlertDialog(
@@ -183,6 +172,8 @@ class _LoginPageState extends State<LoginPage> {
   Future<void> clearLoginData() async {
     await _storage.delete(key: 'user_id');
     await _storage.delete(key: 'password');
+    await _storage.delete(key: 'saved_id');
+    await _storage.delete(key: 'user_data');
   }
 
   @override

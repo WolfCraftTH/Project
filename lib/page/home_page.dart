@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_nav_bar/google_nav_bar.dart';
 import 'package:barcode_widget/barcode_widget.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'chatAI_page.dart';
 import 'book_page.dart';
 
@@ -12,7 +13,45 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  final String userPassword = "056450405018-3";
+  final _storage = const FlutterSecureStorage();
+  String userPassword = "";
+
+  @override
+  void initState() {
+    super.initState();
+    _loadUserPassword();
+  }
+
+  Future<void> _loadUserPassword() async {
+    try {
+      final storedPassword = await _storage.read(key: 'password');
+      if (storedPassword != null) {
+        setState(() {
+          userPassword = storedPassword;
+        });
+      } else {
+        debugPrint('No password stored');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('กรุณาเข้าสู่ระบบใหม่อีกครั้ง'),
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('Error loading password: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('เกิดข้อผิดพลาดในการโหลดข้อมูล: $e'),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -42,34 +81,37 @@ class _HomePageState extends State<HomePage> {
                 ),
               ),
               const SizedBox(height: 30),
-              Container(
-                padding: const EdgeInsets.all(24),
-                decoration: BoxDecoration(
-                  border: Border.all(
-                    color: const Color.fromARGB(255, 0, 0, 0),
-                    width: 2,
+              if (userPassword
+                  .isNotEmpty) // แสดง barcode เมื่อมี password เท่านั้น
+                Container(
+                  padding: const EdgeInsets.all(24),
+                  decoration: BoxDecoration(
+                    border: Border.all(
+                      color: const Color.fromARGB(255, 0, 0, 0),
+                      width: 2,
+                    ),
+                    borderRadius: BorderRadius.circular(10),
                   ),
-                  borderRadius: BorderRadius.circular(10),
+                  child: BarcodeWidget(
+                    barcode: Barcode.code128(),
+                    data: userPassword,
+                    width: 400,
+                    height: 160,
+                    drawText: false,
+                    color: Colors.black,
+                    backgroundColor: Colors.white,
+                  ),
                 ),
-                child: BarcodeWidget(
-                  barcode: Barcode.code128(),
-                  data: userPassword,
-                  width: 400,
-                  height: 160,
-                  drawText: false,
-                  color: Colors.black,
-                  backgroundColor: Colors.white,
-                ),
-              ),
               const SizedBox(height: 10),
-              Text(
-                'รหัสผ่านของคุณ: $userPassword',
-                style: const TextStyle(
-                  fontSize: 14,
-                  color: Colors.grey,
+              if (userPassword.isNotEmpty) // แสดงรหัสเมื่อมี password เท่านั้น
+                Text(
+                  'รหัสผ่านของคุณ: $userPassword',
+                  style: const TextStyle(
+                    fontSize: 14,
+                    color: Colors.grey,
+                  ),
+                  textAlign: TextAlign.center,
                 ),
-                textAlign: TextAlign.center,
-              ),
             ],
           ),
         ),
@@ -93,7 +135,6 @@ class _HomePageState extends State<HomePage> {
                   MaterialPageRoute(
                     builder: (context) => const AIChatPage(
                       apiUrl: 'http://26.100.59.12:8000',
-                      userId: 'test@gmail.com',
                     ),
                   ),
                 );
@@ -109,11 +150,11 @@ class _HomePageState extends State<HomePage> {
             tabs: const [
               GButton(
                 icon: Icons.home,
-                text: 'Home',
+                text: 'หน้าหลัก',
               ),
               GButton(
                 icon: Icons.comment,
-                text: 'AI Chat',
+                text: 'AI แชท',
               ),
               GButton(
                 icon: Icons.book,

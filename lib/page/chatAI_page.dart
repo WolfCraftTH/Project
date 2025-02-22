@@ -2,37 +2,164 @@ import 'package:flutter/material.dart';
 import 'package:dash_chat_2/dash_chat_2.dart';
 import 'package:http/http.dart' as http;
 import 'package:google_nav_bar/google_nav_bar.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'dart:convert';
 import 'home_page.dart';
 import 'book_page.dart';
+import 'chat_state.dart';
 
 class AIChatPage extends StatefulWidget {
   final String apiUrl;
-  final String userId;
 
   const AIChatPage({
     Key? key,
     required this.apiUrl,
-    required this.userId,
   }) : super(key: key);
 
   @override
   _AIChatPageState createState() => _AIChatPageState();
 }
 
-class _AIChatPageState extends State<AIChatPage> {
+class _AIChatPageState extends State<AIChatPage>
+    with AutomaticKeepAliveClientMixin {
   final List<ChatMessage> messages = [];
-  late final ChatUser user;
-  final ChatUser ai = ChatUser(id: "2", firstName: "AI Assistant");
+  late ChatUser user;
+  final ChatUser ai = ChatUser(id: "ai", firstName: "AI Assistant");
   bool _isLoading = false;
+  late SharedPreferences prefs;
+  final ChatState chatState = ChatState();
+  final _storage = const FlutterSecureStorage();
+  String? _userId;
+  String? _userName;
+
+  @override
+  bool get wantKeepAlive => true;
 
   @override
   void initState() {
     super.initState();
-    user = ChatUser(id: "test@gmail.com", firstName: widget.userId);
+    _initializeUserAndChat();
+  }
+
+  Future<void> _initializeUserAndChat() async {
+    await _loadUserData();
+    await _initializeChat();
+  }
+
+  Future<void> _loadUserData() async {
+    try {
+      final String? userId = await _storage.read(key: 'user_id');
+      final String? userData = await _storage.read(key: 'user_data');
+
+      if (userId != null && userData != null) {
+        final Map<String, dynamic> userMap = json.decode(userData);
+        setState(() {
+          _userId = userId;
+          _userName = userMap['name'] ?? userId;
+          user = ChatUser(
+            id: userId,
+            firstName: _userName ?? userId,
+          );
+        });
+      } else {
+        throw Exception('ไม่พบข้อมูลผู้ใช้ กรุณาเข้าสู่ระบบใหม่');
+      }
+    } catch (e) {
+      debugPrint('Error loading user data: $e');
+      _showError('ไม่สามารถโหลดข้อมูลผู้ใช้ได้ กรุณาลองใหม่อีกครั้ง');
+      if (mounted) {
+        Navigator.of(context).pushNamedAndRemoveUntil(
+          '/login',
+          (route) => false,
+        );
+      }
+    }
+  }
+
+  Future<void> _initializeChat() async {
+    if (_userId == null) return;
+
+    // ลองโหลดข้อความจาก Global State ก่อน
+    final cachedMessages = chatState.getMessages(_userId!);
+    if (cachedMessages.isNotEmpty) {
+      setState(() {
+        messages.clear();
+        messages.addAll(cachedMessages);
+      });
+      return;
+    }
+
+    // ถ้าไม่มีใน Global State ให้โหลดจาก SharedPreferences
+    try {
+      prefs = await SharedPreferences.getInstance();
+      await _loadMessages();
+    } catch (e) {
+      debugPrint('Error initializing chat: $e');
+    }
+  }
+
+  Future<void> _loadMessages() async {
+    if (_userId == null) return;
+
+    try {
+      final String? savedMessagesJson =
+          prefs.getString('chat_history_$_userId');
+      if (savedMessagesJson != null) {
+        final List<dynamic> savedMessages = jsonDecode(savedMessagesJson);
+        final loadedMessages = savedMessages
+            .map((messageMap) => ChatMessage(
+                  text: messageMap['text'],
+                  user: ChatUser(
+                    id: messageMap['userId'],
+                    firstName: messageMap['userFirstName'],
+                  ),
+                  createdAt: DateTime.parse(messageMap['createdAt']),
+                ))
+            .toList();
+
+        setState(() {
+          messages.clear();
+          messages.addAll(loadedMessages);
+        });
+
+        chatState.saveMessages(_userId!, messages);
+      }
+    } catch (e) {
+      debugPrint('Error loading messages: $e');
+    }
+  }
+
+  Future<void> _saveMessages() async {
+    if (_userId == null) return;
+
+    try {
+      final List<Map<String, dynamic>> messagesList = messages
+          .map((message) => {
+                'text': message.text,
+                'userId': message.user.id,
+                'userFirstName': message.user.firstName,
+                'createdAt': message.createdAt.toIso8601String(),
+              })
+          .toList();
+
+      await prefs.setString(
+        'chat_history_$_userId',
+        jsonEncode(messagesList),
+      );
+
+      chatState.saveMessages(_userId!, messages);
+    } catch (e) {
+      debugPrint('Error saving messages: $e');
+    }
   }
 
   Future<void> getAIResponse(String message) async {
+    if (_userId == null) {
+      _showError('กรุณาเข้าสู่ระบบก่อนใช้งาน');
+      return;
+    }
+
     try {
       final uri = Uri.parse('${widget.apiUrl}/chat');
 
@@ -44,7 +171,7 @@ class _AIChatPageState extends State<AIChatPage> {
       request.headers['Content-Type'] = 'application/json';
       request.body = jsonEncode({
         'message': message,
-        'user_id': user.firstName,
+        'user_id': _userId,
       });
 
       final streamedResponse = await request.send();
@@ -60,45 +187,32 @@ class _AIChatPageState extends State<AIChatPage> {
           messages.insert(0, aiMessage);
         });
 
+        String fullResponse = '';
         await for (var chunk
             in streamedResponse.stream.transform(utf8.decoder)) {
           try {
             final data = jsonDecode(chunk);
             final response = data['response'] as String;
+            fullResponse += response;
 
             setState(() {
               messages[0] = ChatMessage(
-                text: messages[0].text + response,
+                text: fullResponse,
                 user: ai,
-                createdAt: messages[0].createdAt,
+                createdAt: aiMessage.createdAt,
               );
             });
           } catch (e) {
-            print('Error parsing chunk: $e');
+            debugPrint('Error parsing chunk: $e');
           }
         }
+        await _saveMessages();
       } else {
-        setState(() {
-          messages.insert(
-              0,
-              ChatMessage(
-                text:
-                    'เกิดข้อผิดพลาดในการเชื่อมต่อ: ${streamedResponse.statusCode}',
-                user: ai,
-                createdAt: DateTime.now(),
-              ));
-        });
+        _showError(
+            'เกิดข้อผิดพลาดในการเชื่อมต่อ: ${streamedResponse.statusCode}');
       }
     } catch (e) {
-      setState(() {
-        messages.insert(
-            0,
-            ChatMessage(
-              text: 'เกิดข้อผิดพลาด: $e',
-              user: ai,
-              createdAt: DateTime.now(),
-            ));
-      });
+      _showError('เกิดข้อผิดพลาด: $e');
     } finally {
       setState(() {
         _isLoading = false;
@@ -106,34 +220,59 @@ class _AIChatPageState extends State<AIChatPage> {
     }
   }
 
-  void sendMessage(ChatMessage message) async {
+  void _showError(String message) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.red,
+      ),
+    );
+  }
+
+  Future<void> sendMessage(ChatMessage message) async {
     setState(() {
       messages.insert(0, message);
-      _isLoading = true;
     });
-
+    await _saveMessages();
     await getAIResponse(message.text);
+  }
 
-    setState(() {
-      _isLoading = false;
-    });
+  void _navigateToPage(Widget page) {
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (context) => page),
+      (route) => false,
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    super.build(context);
+
+    if (_userId == null) {
+      return const Scaffold(
+        body: Center(
+          child: CircularProgressIndicator(),
+        ),
+      );
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: const Text(
           "AI Chat",
-          style: TextStyle(
-            color: Color.fromARGB(255, 255, 255, 255),
-          ),
+          style: TextStyle(color: Colors.white),
         ),
         backgroundColor: const Color.fromARGB(255, 103, 80, 164),
       ),
       body: Column(
         children: [
-          if (_isLoading) const LinearProgressIndicator(),
+          if (_isLoading)
+            const LinearProgressIndicator(
+              backgroundColor: Color.fromARGB(255, 103, 80, 164),
+            ),
           Expanded(
             child: DashChat(
               currentUser: user,
@@ -163,151 +302,20 @@ class _AIChatPageState extends State<AIChatPage> {
             tabBackgroundColor: const Color.fromARGB(200, 102, 46, 145),
             gap: 6,
             padding: const EdgeInsets.all(16),
+            selectedIndex: 1,
             onTabChange: (index) {
               if (index == 0) {
-                Navigator.pushReplacement(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => const HomePage(),
-                  ),
-                );
+                _navigateToPage(const HomePage());
               } else if (index == 2) {
-                Navigator.pushReplacement(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => const BookPage(),
-                  ),
-                );
+                _navigateToPage(const BookPage());
               }
             },
             tabs: const [
-              GButton(
-                icon: Icons.home,
-                text: 'Home',
-              ),
-              GButton(
-                icon: Icons.comment,
-                text: 'AI Chat',
-              ),
-              GButton(
-                icon: Icons.book,
-                text: 'จองหนังสือ',
-              )
+              GButton(icon: Icons.home, text: 'หน้าหลัก'),
+              GButton(icon: Icons.comment, text: 'AI แชท'),
+              GButton(icon: Icons.book, text: 'จองหนังสือ'),
             ],
-            selectedIndex: 1,
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class LoginPage extends StatefulWidget {
-  final String apiUrl;
-
-  const LoginPage({
-    Key? key,
-    required this.apiUrl,
-  }) : super(key: key);
-
-  @override
-  _LoginPageState createState() => _LoginPageState();
-}
-
-class _LoginPageState extends State<LoginPage> {
-  final _usernameController = TextEditingController();
-  final _passwordController = TextEditingController();
-  bool _isLoading = false;
-
-  Future<void> _login() async {
-    setState(() {
-      _isLoading = true;
-    });
-
-    try {
-      final response = await http.post(
-        Uri.parse('${widget.apiUrl}/login'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'username': _usernameController.text,
-          'password': _passwordController.text,
-        }),
-      );
-
-      final data = jsonDecode(response.body);
-
-      if (data['status'] == 'success') {
-        if (!mounted) return;
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (context) => AIChatPage(
-              apiUrl: widget.apiUrl,
-              userId: data['user_id'].toString(),
-            ),
-          ),
-        );
-      } else {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(data['message'])),
-        );
-      }
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('เกิดข้อผิดพลาด: $e')),
-      );
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-        });
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('เข้าสู่ระบบ'),
-        backgroundColor: const Color.fromARGB(255, 103, 80, 164),
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            TextField(
-              controller: _usernameController,
-              decoration: const InputDecoration(
-                labelText: 'ชื่อผู้ใช้',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _passwordController,
-              decoration: const InputDecoration(
-                labelText: 'รหัสผ่าน',
-                border: OutlineInputBorder(),
-              ),
-              obscureText: true,
-            ),
-            const SizedBox(height: 24),
-            ElevatedButton(
-              onPressed: _isLoading ? null : _login,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color.fromARGB(255, 103, 80, 164),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-              ),
-              child: _isLoading
-                  ? const CircularProgressIndicator(color: Colors.white)
-                  : const Text('เข้าสู่ระบบ'),
-            ),
-          ],
         ),
       ),
     );
@@ -315,8 +323,7 @@ class _LoginPageState extends State<LoginPage> {
 
   @override
   void dispose() {
-    _usernameController.dispose();
-    _passwordController.dispose();
+    _saveMessages();
     super.dispose();
   }
 }

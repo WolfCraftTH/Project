@@ -1,11 +1,11 @@
 {
-    "name": "myproject",
-    "short_name": "myproject",
+    "name": "RMUTP AI Library",
+    "short_name": "AI Library",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "RMUTP AI Library",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
