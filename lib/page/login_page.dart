@@ -23,7 +23,20 @@ class _LoginPageState extends State<LoginPage> {
   @override
   void initState() {
     super.initState();
+    _loadServerAddress(); // เพิ่มการโหลดค่า IP เมื่อเริ่มต้น
     checkBiometricAuth();
+  }
+
+  // เพิ่มฟังก์ชันสำหรับโหลดค่า IP ที่บันทึกไว้
+  Future<void> _loadServerAddress() async {
+    try {
+      final savedAddress = await _storage.read(key: 'server_address');
+      if (savedAddress != null) {
+        ApiService.setServerAddress(savedAddress);
+      }
+    } catch (e) {
+      debugPrint('Error loading server address: $e');
+    }
   }
 
   Future<void> checkBiometricAuth() async {
@@ -103,9 +116,13 @@ class _LoginPageState extends State<LoginPage> {
     }
   }
 
-  void _showServerSettings() {
+  // ปรับปรุงฟังก์ชันแสดงการตั้งค่า Server
+  void _showServerSettings() async {
+    final String? currentAddress = await _storage.read(key: 'server_address') ??
+        ApiService.getServerAddress();
+
     final TextEditingController controller = TextEditingController(
-      text: ApiService.getServerAddress(),
+      text: currentAddress,
     );
 
     showDialog(
@@ -144,15 +161,21 @@ class _LoginPageState extends State<LoginPage> {
               'บันทึก',
               style: TextStyle(color: Colors.green),
             ),
-            onPressed: () {
+            onPressed: () async {
               if (controller.text.isNotEmpty) {
+                // บันทึกค่า IP ลงใน FlutterSecureStorage
+                await _storage.write(
+                    key: 'server_address', value: controller.text);
                 ApiService.setServerAddress(controller.text);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('บันทึกการตั้งค่าเรียบร้อย'),
-                    backgroundColor: Colors.green,
-                  ),
-                );
+
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('บันทึกการตั้งค่าเรียบร้อย'),
+                      backgroundColor: Colors.green,
+                    ),
+                  );
+                }
               }
               Navigator.of(context).pop();
             },
@@ -228,6 +251,7 @@ class _LoginPageState extends State<LoginPage> {
     await _storage.delete(key: 'password');
     await _storage.delete(key: 'saved_id');
     await _storage.delete(key: 'user_data');
+    // ไม่ต้องลบค่า server_address เพื่อให้เก็บค่าไว้ใช้ครั้งต่อไป
   }
 
   @override
